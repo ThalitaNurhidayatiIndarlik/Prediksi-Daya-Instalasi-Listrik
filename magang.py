@@ -2,8 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 
-from sklearn.linear_model import LinearRegression
-from sklearn.neural_network import MLPRegressor
+from statsmodels.tsa.holtwinters import SimpleExpSmoothing
 
 # ==========================
 # BACA FILE EXCEL
@@ -42,87 +41,104 @@ if len(daya_cols) == 0:
 # Total permohonan per daya
 total_per_daya = df[daya_cols].sum()
 
-# ==========================
-# MOVING AVERAGE (MA-3)
-# ==========================
-moving_avg = total_per_daya.rolling(
-    window=3,
-    min_periods=1
-).mean()
+# =====================================================
+# FIGURE 2
+# FORECAST JUMLAH INSTALASI 7 HARI KE DEPAN
+# =====================================================
 
-# ==========================
+# Cari kolom tanggal
+tanggal_col = None
+for col in df.columns:
+    if "TGL" in str(col).upper():
+        tanggal_col = col
+        break
+
+if tanggal_col is None:
+    raise ValueError("Kolom tanggal tidak ditemukan.")
+
+# Ubah menjadi datetime
+bulan = {
+    "JANUARI": "JANUARY",
+    "FEBRUARI": "FEBRUARY",
+    "MARET": "MARCH",
+    "APRIL": "APRIL",
+    "MEI": "MAY",
+    "JUNI": "JUNE",
+    "JULI": "JULY",
+    "AGUSTUS": "AUGUST",
+    "SEPTEMBER": "SEPTEMBER",
+    "OKTOBER": "OCTOBER",
+    "NOVEMBER": "NOVEMBER",
+    "DESEMBER": "DECEMBER"
+}
+
+df[tanggal_col] = df[tanggal_col].astype(str)
+
+for indo, eng in bulan.items():
+    df[tanggal_col] = df[tanggal_col].str.replace(indo, eng, regex=False)
+
+df[tanggal_col] = pd.to_datetime(df[tanggal_col], dayfirst=True)
+
+# Hitung total instalasi setiap hari
+df["TOTAL_INSTALASI"] = df[daya_cols].sum(axis=1)
+
+# Urutkan berdasarkan tanggal
+df = df.sort_values(tanggal_col)
+
+# ===========================================
 # EXPONENTIAL SMOOTHING
-# α = 0.3
-# (1-α) = 0.7
-# ==========================
-alpha = 0.3
-beta = 0.7
+# ===========================================
 
-exp_smoothing = [total_per_daya.iloc[0]]
-
-for i in range(1, len(total_per_daya)):
-    value = (
-        alpha * total_per_daya.iloc[i]
-        + beta * exp_smoothing[i - 1]
-    )
-    exp_smoothing.append(value)
-
-exp_smoothing = pd.Series(
-    exp_smoothing,
-    index=total_per_daya.index
-)
-
-# ==========================
-# LINEAR REGRESSION
-# ==========================
-X = np.arange(len(total_per_daya)).reshape(-1, 1)
-y = total_per_daya.values
-
-lr_model = LinearRegression()
-lr_model.fit(X, y)
-
-y_pred = lr_model.predict(X)
-
-# ==========================
-# NEURAL NETWORK
-# ==========================
-nn_model = MLPRegressor(
-    hidden_layer_sizes=(10,),
-    activation='relu',
-    solver='adam',
-    max_iter=5000,
-    random_state=42
-)
-
-nn_model.fit(X, y)
-
-y_nn = nn_model.predict(X)
-
-# ==========================
-# FILTERING 
-# ==========================
-
-print("\n=== DAFTAR KATEGORI DAYA ===")
-for col in total_per_daya.index:
-    print(col)
-
-keyword = input(
-    "\nMasukkan daya yang ingin dicari "
-    "(contoh: 450, 900, 1300): "
-)
-
-hasil_filter = total_per_daya[
-    total_per_daya.index.astype(str)
-    .str.contains(keyword, case=False, na=False)
-]
-
-print("\n=== HASIL PENCARIAN ===")
-
-if len(hasil_filter) > 0:
-    print(hasil_filter)
-else:
-    print("Data daya tidak ditemukan.")
+model = SimpleExpSmoothing(df["TOTAL_INSTALASI"])
     
+model_fit = model.fit(
+    smoothing_level=0.3,
+    optimized=True
+)
+
+# Forecast 7 hari
+forecast = model_fit.forecast(7)
+
+# Membuat tanggal prediksi (dibuat lebih dulu)
+forecast_dates = pd.date_range(
+    start=df[tanggal_col].max() + pd.Timedelta(days=1),
+    periods=7,
+    freq="D"
+)
+
+hasil_forecast = pd.DataFrame({
+    "Tanggal": forecast_dates,
+    "Prediksi ES": forecast.round().astype(int)
+})
+
+print("\n===== HASIL FORECAST EXPONENTIAL SMOOTHING =====")
+print(hasil_forecast)
+
+# ===========================================
+# MOVING AVERAGE
+# ===========================================
+
+window = 7
+
+history = list(df["TOTAL_INSTALASI"])
+
+forecast_ma = []
+
+for i in range(7):
+    pred = np.mean(history[-window:])
+    forecast_ma.append(pred)
+    history.append(pred)
+
+forecast_ma = np.array(forecast_ma)
+
+hasil_ma = pd.DataFrame({
+    "Tanggal": forecast_dates,
+    "Prediksi MA": np.round(forecast_ma).astype(int)
+})
+
+print("\n===== HASIL FORECAST MOVING AVERAGE =====")
+print(hasil_ma)
+
 # ==========================
 # FIGURE 1
 # VISUALISASI TREN
@@ -147,147 +163,108 @@ plt.show()
 
 # ==========================
 # FIGURE 2
-# MOVING AVERAGE
+# FORECAST MOVING AVERAGE
 # ==========================
-plt.figure(figsize=(14, 6))
+
+plt.figure(figsize=(14,6))
 
 plt.plot(
-    total_per_daya.index,
-    total_per_daya.values,
+    df[tanggal_col],
+    df["TOTAL_INSTALASI"],
     marker='o',
-    label='Data Asli'
+    linewidth=2,
+    label="Data Aktual"
 )
 
 plt.plot(
-    moving_avg.index,
-    moving_avg.values,
-    marker='s',
+    forecast_dates,
+    forecast_ma,
+    marker='o',
+    linestyle='--',
     linewidth=2,
-    label='Moving Average (3)'
+    label="Moving Average"
 )
 
-plt.title("Moving Average (Window = 3)")
-plt.xlabel("Kategori Daya")
-plt.ylabel("Jumlah Permohonan")
-plt.xticks(rotation=90)
-plt.legend()
+plt.title("Forecast Jumlah Instalasi 7 Hari ke Depan Menggunakan Moving Average")
+plt.xlabel("Tanggal")
+plt.ylabel("Jumlah Instalasi")
 plt.grid(True)
+plt.legend()
 
 plt.tight_layout()
 plt.show()
 
-# ==========================
+# ==============================
 # FIGURE 3
-# EXPONENTIAL SMOOTHING
-# ==========================
-plt.figure(figsize=(14, 6))
+# FORECAST EXPONENTIAL SMOOTHING
+# ==============================
+plt.figure(figsize=(14,6))
 
 plt.plot(
-    total_per_daya.index,
-    total_per_daya.values,
+    df[tanggal_col],
+    df["TOTAL_INSTALASI"],
     marker='o',
-    label='Data Asli'
+    linewidth=2,
+    label="Data Aktual"
 )
 
 plt.plot(
-    exp_smoothing.index,
-    exp_smoothing.values,
-    marker='s',
+    forecast_dates,
+    forecast,
+    marker='o',
+    linestyle='--',
     linewidth=2,
-    label='Exponential Smoothing (α=0.3)'
+    label="Exponential Smoothing"
 )
 
-plt.title("Exponential Smoothing (α = 0.3, 1-α = 0.7)")
-plt.xlabel("Kategori Daya")
-plt.ylabel("Jumlah Permohonan")
-plt.xticks(rotation=90)
-plt.legend()
+plt.title("Forecast Jumlah Instalasi 7 Hari ke Depan Menggunakan Exponential Smoothing")
+plt.xlabel("Tanggal")
+plt.ylabel("Jumlah Instalasi")
 plt.grid(True)
+plt.legend()
 
 plt.tight_layout()
 plt.show()
 
 # ==========================
 # FIGURE 4
-# LINEAR REGRESSION
+# PERBANDINGAN METODE
 # ==========================
-plt.figure(figsize=(14, 6))
+
+plt.figure(figsize=(14,6))
 
 plt.plot(
-    total_per_daya.index,
-    total_per_daya.values,
-    marker='o',
-    label='Data Asli'
-)
-
-plt.plot(
-    total_per_daya.index,
-    y_pred,
+    df[tanggal_col],
+    df["TOTAL_INSTALASI"],
+    color="black",
     linewidth=2,
-    label='Linear Regression'
+    label="Data Aktual"
 )
 
-plt.title("Linear Regression Permohonan Berdasarkan Daya")
-plt.xlabel("Kategori Daya")
-plt.ylabel("Jumlah Permohonan")
-plt.xticks(rotation=90)
-plt.legend()
+plt.plot(
+    forecast_dates,
+    forecast,
+    marker='o',
+    linestyle='--',
+    linewidth=2,
+    label="Exponential Smoothing"
+)
+
+plt.plot(
+    forecast_dates,
+    forecast_ma,
+    marker='s',
+    linestyle=':',
+    linewidth=2,
+    label="Moving Average"
+)
+
+plt.title("Perbandingan Forecasting 7 Hari ke Depan")
+plt.xlabel("Tanggal")
+plt.ylabel("Jumlah Instalasi")
 plt.grid(True)
+plt.legend()
 
 plt.tight_layout()
 plt.show()
 
-# ==========================
-# FIGURE 5
-# NEURAL NETWORK
-# ==========================
-plt.figure(figsize=(14, 6))
-
-plt.plot(
-    total_per_daya.index,
-    total_per_daya.values,
-    marker='o',
-    label='Data Asli'
-)
-
-plt.plot(
-    total_per_daya.index,
-    y_nn,
-    linewidth=2,
-    label='Neural Network'
-)
-
-plt.title("Neural Network Permohonan Berdasarkan Daya")
-plt.xlabel("Kategori Daya")
-plt.ylabel("Jumlah Permohonan")
-plt.xticks(rotation=90)
-plt.legend()
-plt.grid(True)
-
-plt.tight_layout()
-plt.show()
-
-# ==========================
-# FIGURE 6
-# HASIL FILTERING DAYA
-# ==========================
-
-if len(hasil_filter) > 0:
-
-    plt.figure(figsize=(10,5))
-
-    plt.bar(
-        hasil_filter.index,
-        hasil_filter.values
-    )
-
-    plt.title(
-        f"Hasil Pencarian Daya: {keyword}"
-    )
-    plt.xlabel("Kategori Daya")
-    plt.ylabel("Jumlah Permohonan")
-    plt.xticks(rotation=45)
-    plt.grid(True)
-
-    plt.tight_layout()
-    plt.show()
