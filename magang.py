@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from statsmodels.tsa.holtwinters import SimpleExpSmoothing
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
 
 # ==========================
 # BACA FILE EXCEL
@@ -41,8 +43,26 @@ if len(daya_cols) == 0:
 # Total permohonan per daya
 total_per_daya = df[daya_cols].sum()
 
+# ==========================
+# FILTERING DAYA
+# ==========================
+
+keyword = input(
+    "Masukkan daya yang ingin dicari: "
+)
+
+hasil_filter = total_per_daya[
+    total_per_daya.index.astype(str)
+    .str.contains(keyword, case=False, na=False)
+]
+
+if len(hasil_filter) == 0:
+    print("Data tidak ditemukan")
+else:
+    print("\nHasil pencarian:")
+    print(hasil_filter)
+
 # =====================================================
-# FIGURE 2
 # FORECAST JUMLAH INSTALASI 7 HARI KE DEPAN
 # =====================================================
 
@@ -79,40 +99,26 @@ for indo, eng in bulan.items():
 
 df[tanggal_col] = pd.to_datetime(df[tanggal_col], dayfirst=True)
 
-# Hitung total instalasi setiap hari
+# Urutkan berdasarkan tanggal
+df = df.sort_values(tanggal_col).reset_index(drop=True)
+
 df["TOTAL_INSTALASI"] = df[daya_cols].sum(axis=1)
 
-# Urutkan berdasarkan tanggal
-df = df.sort_values(tanggal_col)
+# ==========================
+# DATA TRAINING DAN TESTING
+# ==========================
 
-# ===========================================
-# EXPONENTIAL SMOOTHING
-# ===========================================
+split = int(len(df) * 0.8)
 
-model = SimpleExpSmoothing(df["TOTAL_INSTALASI"])
-    
-model_fit = model.fit(
-    smoothing_level=0.3,
-    optimized=True
-)
+train = df["TOTAL_INSTALASI"][:split]
+test = df["TOTAL_INSTALASI"][split:]
 
-# Forecast 7 hari
-forecast = model_fit.forecast(7)
-
-# Membuat tanggal prediksi (dibuat lebih dulu)
+# Membuat tanggal forecast 7 hari
 forecast_dates = pd.date_range(
     start=df[tanggal_col].max() + pd.Timedelta(days=1),
     periods=7,
     freq="D"
 )
-
-hasil_forecast = pd.DataFrame({
-    "Tanggal": forecast_dates,
-    "Prediksi ES": forecast.round().astype(int)
-})
-
-print("\n===== HASIL FORECAST EXPONENTIAL SMOOTHING =====")
-print(hasil_forecast)
 
 # ===========================================
 # MOVING AVERAGE
@@ -138,6 +144,108 @@ hasil_ma = pd.DataFrame({
 
 print("\n===== HASIL FORECAST MOVING AVERAGE =====")
 print(hasil_ma)
+
+# ===========================================
+# EVALUASI MOVING AVERAGE
+# ===========================================
+
+window = 7
+
+history = list(train)
+
+pred_ma_test = []
+
+for actual in test:
+    pred = np.mean(history[-window:])
+    pred_ma_test.append(pred)
+    history.append(actual)
+
+mse_ma = mean_squared_error(test, pred_ma_test)
+
+print("\n===== MSE MOVING AVERAGE =====")
+print(f"MSE : {mse_ma:.2f}")
+
+# ===========================================
+# SIMPLE EXPONENTIAL SMOOTHING
+# ===========================================
+
+model = SimpleExpSmoothing(df["TOTAL_INSTALASI"])
+    
+model_fit = model.fit(
+    smoothing_level=0.3,
+    optimized=False
+)
+
+# Forecast 7 hari
+forecast = model_fit.forecast(7)
+
+hasil_forecast = pd.DataFrame({
+    "Tanggal": forecast_dates,
+    "Prediksi SES": forecast.round().astype(int)
+})
+
+print("\n===== HASIL FORECAST SIMPLE EXPONENTIAL SMOOTHING =====")
+print(hasil_forecast)
+
+# ===========================================
+# EVALUASI SIMPLE EXPONENTIAL SMOOTHING
+# ===========================================
+
+model_eval = SimpleExpSmoothing(train)
+
+model_fit_eval = model_eval.fit(
+    smoothing_level=0.3,
+    optimized=False
+)
+
+pred_ses_test = model_fit_eval.forecast(len(test))
+
+mse_ses = mean_squared_error(test, pred_ses_test)
+
+print("\n===== MSE SIMPLE EXPONENTIAL SMOOTHING =====")
+print(f"MSE : {mse_ses:.2f}")
+
+# ===========================================
+# LINEAR REGRESSION
+# ===========================================
+
+# Variabel waktu
+X_train = np.arange(len(train)).reshape(-1,1)
+
+# Membuat model
+lr_model = LinearRegression()
+lr_model.fit(X_train, train)
+
+# Prediksi 7 hari ke depan
+future_X = np.arange(len(df), len(df)+7).reshape(-1,1)
+
+forecast_lr = lr_model.predict(future_X)
+forecast_lr = np.clip(forecast_lr, 0, None)
+
+hasil_lr = pd.DataFrame({
+    "Tanggal": forecast_dates,
+    "Prediksi LR": np.round(forecast_lr).astype(int)
+})
+
+print("\n===== HASIL FORECAST LINEAR REGRESSION =====")
+print(hasil_lr)
+
+# ===========================================
+# EVALUASI LINEAR REGRESSION
+# ===========================================
+
+X_train = np.arange(len(train)).reshape(-1,1)
+X_test = np.arange(len(train), len(train)+len(test)).reshape(-1,1)
+
+lr_eval = LinearRegression()
+lr_eval.fit(X_train, train)
+
+pred_lr_test = lr_eval.predict(X_test)
+
+mse_lr = mean_squared_error(test, pred_lr_test)
+
+print("\n===== MSE LINEAR REGRESSION =====")
+print(f"MSE : {mse_lr:.2f}")
 
 # ==========================
 # FIGURE 1
@@ -196,7 +304,7 @@ plt.show()
 
 # ==============================
 # FIGURE 3
-# FORECAST EXPONENTIAL SMOOTHING
+# FORECAST SIMPLE EXPONENTIAL SMOOTHING
 # ==============================
 plt.figure(figsize=(14,6))
 
@@ -214,10 +322,43 @@ plt.plot(
     marker='o',
     linestyle='--',
     linewidth=2,
-    label="Exponential Smoothing"
+    label="Simple Exponential Smoothing"
 )
 
-plt.title("Forecast Jumlah Instalasi 7 Hari ke Depan Menggunakan Exponential Smoothing")
+plt.title("Forecast Jumlah Instalasi 7 Hari ke Depan Menggunakan Simple Exponential Smoothing")
+plt.xlabel("Tanggal")
+plt.ylabel("Jumlah Instalasi")
+plt.grid(True)
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# ==============================
+# FIGURE 4
+# FORECAST LINEAR REGRESSION
+# ==============================
+
+plt.figure(figsize=(14,6))
+
+plt.plot(
+    df[tanggal_col],
+    df["TOTAL_INSTALASI"],
+    marker='o',
+    linewidth=2,
+    label="Data Aktual"
+)
+
+plt.plot(
+    forecast_dates,
+    forecast_lr,
+    marker='o',
+    linestyle='--',
+    linewidth=2,
+    label="Linear Regression"
+)
+
+plt.title("Forecast Jumlah Instalasi 7 Hari ke Depan Menggunakan Linear Regression")
 plt.xlabel("Tanggal")
 plt.ylabel("Jumlah Instalasi")
 plt.grid(True)
@@ -227,7 +368,7 @@ plt.tight_layout()
 plt.show()
 
 # ==========================
-# FIGURE 4
+# FIGURE 5
 # PERBANDINGAN METODE
 # ==========================
 
@@ -243,20 +384,29 @@ plt.plot(
 
 plt.plot(
     forecast_dates,
-    forecast,
-    marker='o',
-    linestyle='--',
-    linewidth=2,
-    label="Exponential Smoothing"
-)
-
-plt.plot(
-    forecast_dates,
     forecast_ma,
     marker='s',
     linestyle=':',
     linewidth=2,
     label="Moving Average"
+)
+
+plt.plot(
+    forecast_dates,
+    forecast,
+    marker='o',
+    linestyle='--',
+    linewidth=2,
+    label="Simple Exponential Smoothing"
+)
+
+plt.plot(
+    forecast_dates,
+    forecast_lr,
+    marker='^',
+    linestyle='-.',
+    linewidth=2,
+    label="Linear Regression"
 )
 
 plt.title("Perbandingan Forecasting 7 Hari ke Depan")
@@ -268,3 +418,32 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
+# ==========================
+# TABEL EVALUASI
+# ==========================
+
+hasil_mse = pd.DataFrame({
+    "Metode": [
+        "Moving Average",
+        "Simple Exponential Smoothing",
+        "Linear Regression"
+    ],
+    "MSE":[
+    round(mse_ma,2),
+    round(mse_ses,2),
+    round(mse_lr,2)
+    ]
+})
+
+print("\n===== HASIL EVALUASI =====")
+print(hasil_mse)
+
+# ==========================
+# METODE TERBAIK
+# ==========================
+
+metode_terbaik = hasil_mse.loc[hasil_mse["MSE"].idxmin()]
+
+print("\n===== METODE TERBAIK =====")
+print(f"Metode : {metode_terbaik['Metode']}")
+print(f"MSE    : {metode_terbaik['MSE']:.2f}")
